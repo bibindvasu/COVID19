@@ -824,7 +824,7 @@ layout(title = "Population Density across Indian States")
 ```{r}
 
 
-Sys.setenv('MAPBOX_TOKEN' = 'sk.eyJ1IjoiYnZhc3UiLCJhIjoiY2ticmQ5NHljMnZkbjJ4cWlwcWdjaGRsdCJ9.WCbtAqj_lMlGi4IMefOFMQ')
+
 ```
 
 
