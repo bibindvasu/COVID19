@@ -1,0 +1,1057 @@
+---
+title: "GIS_Based_analysis"
+author: "Bibind_Vasu"
+date: "6/21/2020"
+output: html_document
+---
+
+```{r}
+library(sf)
+library(raster)
+library(marmap)
+library(robis)
+library(gridExtra)
+library(tidyverse)
+my_sf <- st_read("india_states_2014/india_states.shp")
+```
+
+
+
+```{r}
+getwd()
+library(GADMTools)
+india_wrapper <- gadm_sp_loadCountries("IND", level = 1, basefile = "./")
+# check your directory for a file "IND_adm1.rds" after running this command
+```
+```{r}
+glimpse(india_wrapper)
+```
+
+
+```{r}
+#Spatial data frame
+my_spdf <- as(my_sf, "Spatial")
+class(my_spdf)
+
+```
+
+
+```{r}
+str(my_spdf, max.level = 2)
+```
+```{r}
+library(tidyverse)
+glimpse(my_spdf@data)
+```
+
+```{r}
+ind_sf <- st_as_sf(my_spdf)
+class(ind_sf)
+```
+
+
+```{r}
+head(ind_sf, 3)
+```
+
+
+```{r}
+glimpse(ind_sf)
+```
+
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+uts <- c("Delhi", "Andaman & Nicobar Islands", "Puducherry",
+"Lakshadweep", "Dadra & Nagar Haveli", "Daman & Diu",
+"Chandigarh")
+
+ind_sf <- ind_sf %>%dplyr::select(name, abbr) %>%mutate(
+type = ifelse(name %in% uts, "Union Territory", "State")
+) %>%rename(abb = abbr, state_ut = name)
+```
+
+```{r}
+class(ind_sf)
+head(ind_sf)
+```
+
+```{r}
+# see prepare_data.R script in github for details of creating attributes_df
+attributes_df <- readRDS("attributes.rds")
+
+head(attributes_df)
+```
+
+
+
+
+```{r}
+View(attributes_df)
+```
+
+
+```{r}
+#covid data
+covid_india <- read.csv("covid_19_india.csv", header = TRUE, sep = ",")
+covid_india <- covid_india%>%dplyr::select("State.UnionTerritory","Date","Confirmed")
+covid_india <- reshape(covid_india , idvar = "State.UnionTerritory", timevar = "Date", direction = "wide")
+head(covid_india)
+```
+
+
+```{r}
+#renaming
+colnames(covid_india)[grep("State.UnionTerritory", colnames(covid_india))] <-"state_ut"
+head(covid_india)
+```
+
+```{r}
+#merging covid data
+covid_df <- attributes_df%>%left_join(covid_india, by= "state_ut" )
+myvars <- c("state_ut"   ,        "data_year"     ,     "comparable_economy" ,"nominal_gdp_usd"  ,  "nominal_gdp_inr"  ,  "pop_2011" , "decadal_growth"     ,"rural_pop"       ,   "urban_pop"      ,    "area_km2"       ,    "density_km2"     ,   "sex_ratio"     ,"region" , "Confirmed.22/04/20","Confirmed.22/05/20", "Confirmed.22/06/20")
+newdata <- covid_df[myvars]
+
+newdata <- newdata  %>% rename("April22" = `Confirmed.22/04/20`, "May22" = `Confirmed.22/05/20`,"June22" = `Confirmed.22/06/20` )
+colnames(newdata)
+```
+
+
+```{r}
+ind_sf <- ind_sf %>%left_join(newdata, by = "state_ut")%>%mutate(june_apr_rate = June22/ April22,
+cases_per_capita= June22/ pop_2011
+)
+```
+
+
+```{r}
+head(ind_sf, 3)
+```
+
+
+```{r}
+library(units)
+# mutate area
+ind_sf <- ind_sf %>%
+mutate(my_area = st_area(.))
+
+# convert units
+units(ind_sf$my_area) <- with(ud_units, km^2)
+
+# mutate gdp density
+ind_sf <- ind_sf %>%
+mutate(covid_density_usd_km2 = cases_per_capita/ my_area)
+```
+
+
+
+```{r}
+# strip units class
+ind_sf <- ind_sf %>%
+mutate(
+my_area = as.vector(my_area),
+covid_density_usd_km2 = as.vector(covid_density_usd_km2)
+)
+
+original_geometry <- st_geometry(ind_sf)
+
+library(rmapshaper)
+simp_sf <- ms_simplify(ind_sf, keep = 0.01, keep_shapes = TRUE)
+simple_geometry <- st_geometry(simp_sf)
+
+par(mfrow = c(1,2))
+plot(original_geometry, main = "Original Geometry")
+plot(simple_geometry, main = "Simplified Geometry")
+
+str(simp_sf)
+```
+
+```{r}
+saveRDS(simp_sf, "simp_sf.rds")
+```
+
+
+
+```{r}
+library(tidyverse)
+library(sf)
+simp_sf <- readRDS("simp_sf.rds")
+plot(simp_sf['pop_2011'])
+#plot(simp_sf['covid_density_usd_km2'])
+```
+
+
+```{r}
+plot(simp_sf['covid_density_usd_km2'])
+```
+
+
+```{r}
+
+plot(simp_sf['june_apr_rate'])
+
+```
+
+
+
+
+```{r}
+library(tmap)
+simp_sf %>%
+filter(!state_ut %in% c("Andaman & Nicobar Islands", "Lakshadweep")) %>%
+tm_shape() +
+tm_fill(col = "pop_2011", title = "No. People") +
+tm_borders(lwd = 0.5) +
+tm_text("abb", size = 0.5) +
+tm_style("gray") +
+tm_layout(
+main.title = "Population (2011)",
+main.title.position = c("center"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+) +
+tm_credits("Data:\n2011 Census", position = c("left", "bottom"))
+
+```
+
+```{r}
+str(simp_sf)
+unique(simp_sf$region)
+```
+
+
+```{r}
+simp_sf$log_density <- log(simp_sf$covid_density_usd_km2)
+```
+
+
+```{r}
+states_sf <- simp_sf %>%
+filter(!type == "Union Territory" )
+
+
+states_sf <- states_sf %>%
+filter(!region == "Northeastern" )
+
+
+growth <- tm_shape(states_sf) +
+tm_fill(col = "june_apr_rate", title = "Rate of Covid Growth") +
+tm_borders(lwd = 0.5) +
+tm_layout(
+main.title = "Rate of Covid Growth (April-June)",
+main.title.position = c("center"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+) +
+tm_credits("Data:\n2001-2011 Census, Covid Data", position = c("left", "bottom"))
+
+density <- tm_shape(simp_sf) +
+tm_fill(col = "log_density", title = " Log No. Cases/ person/ Sq Km",
+palette = "YlGnBu") +
+tm_borders(lwd = 0.5) +
+tm_layout(
+main.title = " Logarithmic-Cases per capita per sq.km (2011)",
+main.title.position = c("center"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+) +
+tm_credits("Data:\n2011 Census", position = c("left", "bottom"))
+
+tmap_arrange(growth, density)
+```
+
+
+```{r}
+glimpse(simp_sf)
+```
+
+
+```{r}
+ne_covid <- simp_sf %>%
+filter(region == "Central" | region == "Northern"|region =="Western") %>%
+tm_shape() +
+tm_fill(col = "June22", title = "Covid Cases June22", palette = "-Reds") +
+tm_borders(lwd = 0.5) +
+tm_text('state_ut', size = 0.75) +
+tm_layout(
+main.title = "Covid Cases in the Northern Region",
+main.title.position = c("center"),
+main.title.size = 1
+) +
+tm_credits("Data Source: Wikipedia", position = c("left", "top"))
+```
+
+
+
+```{r}
+regional_sf <- simp_sf %>%
+group_by(region) %>%
+summarise(pop = sum(pop_2011))
+
+inset <- regional_sf %>%
+filter(!region== "Arabian Sea",
+!region == "Bay of Bengal") %>%
+mutate(central = ifelse((region == "Central" | region == "Northern"|region =="Western"), TRUE, FALSE)) %>%
+tm_shape() +
+tm_fill(col = "central", palette = c("grey", "red")) +
+tm_style("cobalt") +
+tm_legend(show = FALSE)
+```
+
+
+
+```{r}
+library(grid)
+ne_covid
+print(inset, vp = viewport(0.24, 0.18, width = 0.2, height = 0.4))
+```
+
+
+
+```{r}
+# create custom labels for log scale
+gdp_seq <- 10 ^ (seq(1, 2.0, by = 0.3))
+gdp_vec <- round(gdp_seq)
+
+my_labels = vector(mode = "character", length = 6)
+for (i in seq_along(1:6)) {
+my_labels[i] = str_c(gdp_vec[i], " to ", gdp_vec[i + 1])
+}
+
+simp_nf <- simp_sf %>% drop_na()
+simp_nf %>%filter(!is.na(June22))%>%
+mutate(
+log_pc_covid = log10(June22),
+region_fac = factor(region, levels = c("Northern", "Western", "Southern",
+"Central", "Eastern", "Northeastern",
+"Arabian Sea", "Bay of Bengal"))
+) %>%
+filter(!state_ut %in% c("Andaman & Nicobar Islands",
+"Lakshadweep")) %>%
+tm_shape() +
+tm_borders(lwd = 0.5, col = "white") +
+tm_fill(col = 'log_pc_covid', title = '', palette = "viridis",
+labels = my_labels) +
+tm_facets(by = "region_fac", nrow = 2, free.coords = TRUE) +
+tm_layout(
+main.title = "Covid cases in June by Region",
+main.title.size = 1,
+main.title.position = "center",
+legend.outside.position = "right"
+)
+```
+
+```{r}
+pop_bubbles <- simp_sf %>%
+tm_shape() +
+tm_polygons() +
+tm_bubbles(col = "gold", size = "June22",
+scale = 3, title.size = "") +
+tm_text("abb", size = "June22", root = 5,
+legend.size.show = FALSE) +
+tm_layout(
+main.title = "CovidCases-June2020",
+main.title.position = c("center"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+gdp_bubbles <- simp_sf %>%
+tm_shape() +
+tm_polygons() +
+tm_bubbles(col = "gold", size = "june_apr_rate",
+scale = 3, title.size = "") +
+tm_text("abb", size = "june_apr_rate", root = 5,
+legend.size.show = FALSE) +
+tm_layout(
+main.title = "April-June Growth Rate of Covid",
+main.title.position = c("center"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+tmap_arrange(pop_bubbles, gdp_bubbles)
+```
+
+```{r}
+str(proj_sf)
+```
+
+
+```{r}
+library(ggplot2)
+library(ggrepel)
+
+proj_sf <- simp_sf %>%
+st_transform(crs = 24343) %>%
+mutate(
+CENTROID = purrr::map(geometry, st_centroid),
+COORDS = purrr::map(CENTROID, st_coordinates),
+COORDS_X = purrr::map_dbl(COORDS, 1),
+COORDS_Y = purrr::map_dbl(COORDS, 2)
+)
+
+kerala <- proj_sf %>%
+filter(state_ut == "Kerala")
+
+proj_sf %>%filter(!region %in% c("Northeastern")) %>%
+ggplot() +
+geom_sf(aes(fill = june_apr_rate), lwd = 0) +
+geom_sf(fill = NA, color = "green", lwd = 0.5) +
+scale_fill_viridis_c("Covid growth rate", labels = scales::comma, option = "A") +
+labs(
+title = "Covid 2 month grwoth rate across Indian States",
+caption = "Source: Wikipedia"
+) +
+geom_text_repel(
+data = kerala,
+mapping = aes(x = COORDS_X, y = COORDS_Y, label = state_ut),
+nudge_x = -0.5,
+nudge_y = -1
+) +
+scale_y_continuous(NULL) +
+scale_x_continuous(NULL) +
+theme(plot.title = element_text(hjust = 0.5)) +
+# remove graticules
+coord_sf(datum = NA) +
+theme_void()
+```
+
+```{r}
+# save geometry
+proj_geometry <- proj_sf %>% dplyr::select(state_ut)
+
+# gather data and rejoin geometry
+pop_gathered <- proj_sf %>%
+st_set_geometry(NULL) %>%
+dplyr::select(state_ut, rural_pop, urban_pop) %>%
+gather(key = "pop", value = "count", -state_ut) %>%
+arrange(state_ut) %>%
+left_join(proj_geometry) %>%
+st_as_sf()
+
+# create a list of urban and rural populations
+pop_split <- pop_gathered %>% split(.$pop)
+
+# draw 1 dot per 1 lakh people
+generate_samples <- function(data) {
+st_sample(data, size = round(data$count / 1e5))
+}
+
+# generate samples for each and combine
+points <- map(pop_split, generate_samples)
+points <- imap(points, ~st_sf(tibble(
+pop = rep(.y, length(.x))),
+geometry = .x))
+points <- do.call(rbind, points)
+
+# group points into multipoints
+points <- points %>%
+group_by(pop) %>%
+summarise()
+
+# plot with ggplot
+points %>%
+ggplot() +
+geom_sf(data = simp_sf) +
+geom_sf(aes(color = pop, fill = pop),
+size = 0.1, alpha = 0.4) +
+scale_fill_discrete("Population", labels = c("Rural", "Urban")) +
+labs(
+title = "Density of India's Urban and Rural Population (2011)",
+caption = "1 dot = 1 lakh people"
+) +
+theme(plot.title = element_text(hjust = 0.5)) +
+coord_sf(datum = NA) +
+theme_void() +
+guides(color = FALSE)
+```
+
+```{r}
+library(cartogram)
+
+ccart_gdp_sf <- cartogram_cont(proj_sf, "June22")
+
+gdp_ccart <- ccart_gdp_sf %>%
+filter(!state_ut == "Andaman & Nicobar Islands") %>%
+tm_shape() +
+tm_polygons("June22", title = "Covid Cases June",
+palette = "Greens") +
+tm_layout(
+main.title = "Area Distorted by Covid Cases",
+main.title.position = c("left"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+gdp_original <- proj_sf %>%
+filter(!state_ut == "Andaman & Nicobar Islands") %>%
+tm_shape() +
+tm_polygons(col = "June22", title = "June22 Covid Cases",
+palette = "Greens") +
+tm_layout(
+main.title = "June22 Covid Cases",
+main.title.position = c("left"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+tmap_arrange(gdp_original, gdp_ccart)
+```
+
+
+
+
+```{r}
+# Dorling graph- rate of growth of covid cases
+proj_sf <- proj_sf%>%drop_na()
+ncart_gdp_sf <- cartogram_ncont(proj_sf, "june_apr_rate")
+dorling_gdp_sf <- cartogram_dorling(proj_sf, "june_apr_rate")
+
+gdp_ncart <- ncart_gdp_sf %>%
+filter(!state_ut == "Andaman & Nicobar Islands") %>%
+tm_shape() +
+tm_polygons("june_apr_rate", title = "Growth Rate of Covid Cases",
+palette = "Greens") +
+tm_layout(
+main.title = "Non-Continuous Cartogram",
+main.title.position = c("left"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+gdp_dorling <- dorling_gdp_sf %>%
+filter(!state_ut == "Andaman & Nicobar Islands") %>%
+tm_shape() +
+tm_polygons("june_apr_rate", title = "Growth rate of Covid Cases",
+palette = "Greens") +
+tm_text("abb", size = 0.5) +
+tm_layout(
+main.title = "Dorling Cartogram",
+main.title.position = c("left"),
+main.title.size = 1,
+legend.position = c("right", "bottom")
+)
+
+tmap_arrange(gdp_ncart, gdp_dorling)
+```
+
+```{r}
+#Hexbin Map of Corna Growth Rate
+library(geogrid) # devtools::install_github("jbaileyh/geogrid")
+
+## test possible grids before selecting seed
+# par(mfrow = c(3, 3), mar = c(0, 0, 2, 0))
+# for (i in 1:9) {
+# new_cells <- calculate_grid(shape = proj_sf,
+# grid_type = "hexagonal", seed = i)
+# plot(new_cells, main = paste("Seed", i, sep = " "))
+# }
+
+new_cells_hex <- calculate_grid(shape = proj_sf,
+grid_type = "hexagonal", seed = 1)
+hex_result <- assign_polygons(proj_sf, new_cells_hex)
+
+# assign_polygons generates V1 V2 which are center coordinates of tiles
+ggplot(hex_result) +
+geom_sf(aes(fill =june_apr_rate)) +
+geom_text(aes(x = V1, y = V2,
+label = abb), size = 2, colour = "white") +
+scale_fill_viridis_c("Per Capita GDP\n(USD$)", labels = scales::dollar) +
+labs(
+title = "Hexbin Map of Corona Growth Rate",
+caption = "Data Source: Wikipedia"
+) +
+coord_sf(datum = NA) +
+theme_void() +
+guides(size = FALSE)
+```
+
+
+
+```{r}
+library(geofacet)
+
+simp_df <- simp_sf %>%
+st_set_geometry(NULL) %>%
+dplyr::select(state_ut, urban_pop, rural_pop) %>%
+gather(Type, pop_value, -state_ut) %>%
+mutate(Type = ifelse(Type == "urban_pop", "Urban", "Rural"))
+
+ggplot(simp_df,
+aes(x = Type, y = pop_value/ 1e6, fill = Type)) +
+geom_col() + coord_flip()+
+facet_geo(~ state_ut, grid = mygrid, label = "code") ++
+labs(
+title = "Urban and Rural Populations Across States/UTs (2011)",
+caption = "Data Source: Wikipedia",
+x = "",
+y = "Population (Millions)"
+) +
+theme_bw() +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+```{r}
+str(simp_df)
+```
+
+
+```{r}
+ggplot(simp_df,aes(x =Type, y = pop_value/ 1e6, fill = Type)) +
+geom_col() + coord_flip()+
+facet_geo(~Type)
+
+```
+
+
+
+```{r}
+glimpse(simp_df)
+
+as.factor(simp_df$state_ut)
+```
+
+```{r}
+library(tidyverse)
+library(sf)
+library(tmap)
+
+simp_sf <- readRDS("simp_sf.rds")
+
+states_sf <- simp_sf %>%
+filter(!type == "Union Territory")
+
+proj_sf <- simp_sf %>%
+st_transform(crs = 24343) %>%
+mutate(
+CENTROID = purrr::map(geometry, st_centroid),
+COORDS = purrr::map(CENTROID, st_coordinates),
+COORDS_X = purrr::map_dbl(COORDS, 1),
+COORDS_Y = purrr::map_dbl(COORDS, 2)
+)
+```
+
+
+```{r}
+pc_gdp_anim <- simp_sf %>%
+filter(!state_ut %in% c("Lakshadweep", "Andaman & Nicobar Islands")) %>%
+mutate(
+log_pc_usd = log10(per_capita_gdp_usd),
+region_fac = factor(region, levels = c("Northern", "Western", "Southern",
+"Central", "Eastern", "Northeastern"))
+) %>%
+tm_shape() +
+tm_fill(col = 'log_pc_usd', title = 'Per Capita GDP (USD$)',
+palette = "viridis",
+labels = my_labels) +
+tm_borders(col = "white") +
+tm_facets(along = "region_fac", free.coords = FALSE) +
+tm_layout(main.title.size = 1)
+
+#anim_save("nom_gdp_anim.gif")
+#ggsave("tst.png",height=9,width=12,dpi=72)
+
+#tmap_animation(pc_gdp_anim, filename = "pc_gdp_anim.gif",delay = 200, restart.delay = 200)
+```
+
+
+```{r}
+library(gganimate)
+library(transformr)
+states <- c(
+'Original',
+'Continuous Cartogram Weighted by Nominal GDP',
+'Dorling Cartogram Weighted by Nominal GDP',
+'Hexagonal Tiling'
+)
+
+# cartograms, hexbin created in previous lesson
+
+proj_sf$state <- states[1]
+ccart_gdp_sf$state <- states[2]
+dorling_gdp_sf$state <- states[3]
+hex_result$state <- states[4]
+
+nom_gdp_all <- rbind(proj_sf,
+ccart_gdp_sf[, names(proj_sf)],
+dorling_gdp_sf[, names(proj_sf)],
+hex_result[, names(proj_sf)])
+nom_gdp_all$state <- factor(nom_gdp_all$state, levels = states)
+
+ggplot(nom_gdp_all) +
+geom_sf(aes(fill = nominal_gdp_usd / 1e9, group = state_ut)) +
+scale_fill_viridis_c(labels = scales::dollar) +
+coord_sf(datum = NA) +
+theme_void() +
+theme(legend.position = 'bottom',
+legend.text = element_text(angle = 30, hjust = 1)) +
+labs(title = 'Showing {closest_state}',
+fill = 'Nominal GDP (USD$ Billion)') +
+transition_states(state, 2, 1)
+anim_save("nom_gdp_anim.gif")
+
+
+```
+
+
+```{r}
+library(ggiraph)
+
+tooltip_css <- "background-color:gray;color:white;padding:5px;border-radius:5px;font-family:sans-serif;font-size:12px;"
+
+gg_sex <- simp_sf %>%
+mutate(
+tip = str_c(
+"<b>", state_ut, " : ", sex_ratio, "</b>",
+"</span></div>")
+) %>%
+filter(!state_ut %in% c("Daman & Diu", "Dadra & Nagar Haveli")) %>%
+ggplot() +
+geom_sf_interactive(aes(fill = sex_ratio,
+tooltip = tip, data_id = state_ut)) +
+geom_sf(fill = NA, color = "grey", lwd = 0.5) +
+scale_fill_viridis_c("Sex Ratio", labels = scales::comma, option = "A") +
+labs(
+title = "Sex Ratio across Indian States",
+caption = "Source: Wikipedia"
+) +
+coord_sf(datum = NA) +
+theme_void() +
+theme(plot.title = element_text(hjust = 0.5))
+
+ggiraph(ggobj = gg_sex,
+hover_css = "cursor:pointer;stroke-width:5px;fill-opacity:0.8;",
+tooltip_extra_css = tooltip_css, tooltip_opacity = 0.75)
+```
+
+
+
+```{r}
+tmap_mode("view")
+states_sf %>%
+mutate(
+gdp_density = gdp_density_usd_km2 / 1e6,
+label = str_c(state_ut, ": ", gdp_density)
+) %>%
+dplyr::select(label, everything()) %>%
+tm_shape() +
+tm_fill(col = 'gdp_density', title = "USD$(mil)/sq.km") +
+tm_borders(lwd = 0.5)
+
+```
+
+
+
+```{r}
+library(mapview)
+library(leaflet)
+mapview(
+simp_sf,
+zcol = c("state_ut", "pop_2011", "per_capita_gdp_usd","density_km2", "sex_ratio"),
+legend = FALSE,
+hide = TRUE
+)
+```
+
+```{r}
+
+library(leaflet)
+library(leaflet.extras)
+
+# multipoints are not supported so cast to points
+my_points <- st_cast(points, "POINT")
+
+# transform to geo crs for leaflet mapping
+geo_points <- my_points %>%
+st_transform(crs = 4326)
+
+# create data for different groups
+rural <- geo_points %>% filter(pop == "rural_pop")
+urban <- geo_points %>% filter(pop == "urban_pop")
+state_lines <- st_geometry(simp_sf)
+
+leaflet() %>%
+addProviderTiles("CartoDB.Positron") %>%
+addResetMapButton() %>%
+addPolylines(
+data = state_lines,
+color = "black",
+weight = 1,
+opacity = 1,
+) %>%
+addCircleMarkers(
+data = rural,
+color = "#F8766D",
+radius = 1,
+stroke = FALSE,
+fillOpacity = 0.5,
+group = "Rural"
+) %>%
+addCircleMarkers(
+data = urban,
+color = "#00BFC4",
+radius = 1,
+stroke = FALSE,
+fillOpacity = 0.5,
+group = "Urban"
+) %>%
+addLayersControl(
+overlayGroups = c("Rural", "Urban", "Rural Population"),
+options = layersControlOptions(collapsed = FALSE)
+)
+
+```
+
+```{r}
+library(plotly)
+plot_ly(states_sf,
+split = ~state_ut,
+color = ~density_km2,
+text = ~paste0(state_ut, ": ", density_km2),
+hoverinfo = "text",
+hoveron = "fill",
+alpha = 0.8,
+showlegend = FALSE) %>%
+layout(title = "Population Density across Indian States")
+```
+
+
+
+```{r}
+
+
+Sys.setenv('MAPBOX_TOKEN' = 'sk.eyJ1IjoiYnZhc3UiLCJhIjoiY2ticmQ5NHljMnZkbjJ4cWlwcWdjaGRsdCJ9.WCbtAqj_lMlGi4IMefOFMQ')
+```
+
+
+```{r}
+library(listviewer)
+library(crosstalk)
+library(DT)
+library(plotly)
+
+simp_sd <- SharedData$new(
+simp_sf %>%
+dplyr::select(state_ut, pop_2011, decadal_growth, region) %>%
+dplyr::mutate(pop_2011 = format(simp_sf$pop_2011, big.mark = ",")),
+~region)
+
+bscols(
+plot_mapbox(
+simp_sd,
+text = ~state_ut, hoverinfo = "text"
+) %>%
+layout(title = "Filter Table by Region via Point Selection"),
+DT::datatable(
+simp_sd,
+rownames = FALSE,
+colnames = c('State/UT','Population','Pop. Growth','Region','geometry'),
+options = list(
+autoWidth = FALSE,
+columnDefs = list(
+list(width = '50px', className = 'dt-left', targets = 0:4)
+)
+)
+)
+)
+```
+
+```{r}
+library(shiny)
+library(leaflet)
+library(dplyr)
+server <- function(input,output, session){
+}
+```
+
+
+```{r}
+ui <- fluidPage(
+  
+  leafletOutput("mymap",height = 1000)
+)
+ui
+```
+
+
+```{r}
+output$mymap <- renderLeaflet({
+   m <- leaflet() %>%
+          addTiles() %>%
+          setView(lng=-73.935242, lat=40.730610 , zoom=10)
+   m
+ }) 
+```
+
+
+```{r}
+library(tigris)
+library(sf)
+library(tidycensus)
+library(tidyverse)
+library(rvest)
+options(tigris_class = "sf")
+options(tigris_use_cache = TRUE)
+
+api_key <- "2aef3efc0b9eecc904fe0e07bf53459a4ad2ab76"
+census_api_key(api_key)
+
+```
+
+```{r}
+
+# create df of states and counties
+counties <- tribble(
+~state, ~county,
+"PA", "Philadelphia",
+"PA", "Montgomery",
+"PA", "Bucks",
+"PA", "Delaware",
+"NJ", "Burlington",
+"NJ", "Camden",
+"NJ", "Gloucester"
+)
+
+# query tidycensus and combine data into one sf object
+raw_tracts <- map2(counties$state, counties$county, function(x, y) {
+get_acs(geography = "tract", state = x, county = y,
+variables = c(hhincome = "B19013_001"),
+geometry = TRUE)
+}) %>%
+do.call(rbind, .)
+
+glimpse(raw_tracts)
+```
+
+
+```{r}
+st_crs(raw_tracts)
+```
+
+```{r}
+st_is_longlat(raw_tracts)
+```
+
+
+```{r}
+proj_crs <- 2272
+proj_tracts <- raw_tracts %>%
+st_transform(crs = proj_crs)
+st_crs(proj_tracts)
+```
+
+
+
+```{r}
+# choose a central long-lat point and radius to define circle
+city_hall_lng <- -75.1657936
+city_hall_lat <- 39.952383
+geo_crs <- 4326
+buffer <- 55000 # ft (same units as crs)
+
+circle <- st_sfc(st_point(c(city_hall_lng, city_hall_lat)),
+crs = geo_crs) %>%
+st_transform(crs = proj_crs) %>%
+st_buffer(dist = buffer)
+
+st_crs(circle)
+```
+
+
+```{r}
+philly <- proj_tracts[circle,]
+glimpse(philly)
+```
+
+
+
+```{r}
+philly_dj <- proj_tracts[circle, , op = st_disjoint]
+nrow(philly_dj)
+```
+
+```{r}
+# sgbp, sparse matrix
+philly_sparse <- proj_tracts %>%
+filter(lengths(st_intersects(x = ., y = circle)) > 0)
+
+# sgbp, dense matrix
+philly_dense <- proj_tracts %>%
+filter(st_intersects(x = ., y = circle, sparse = FALSE))
+```
+
+
+```{r}
+
+city_hall <- st_sfc(
+st_point(c(city_hall_lng, city_hall_lat)),
+crs = geo_crs) %>%
+st_transform(crs = proj_crs)
+
+proj_tracts %>%
+filter(st_within(x = ., y = circle, sparse = FALSE)) %>%
+ggplot() +
+geom_sf() +
+geom_sf(data = circle, color = "red", fill = NA) +
+geom_sf(data = city_hall, color = "blue", size = 2) +
+labs(title = "Census Tracts Within 55,000 ft of City Hall")
+```
+
+
+
+```{r}
+library(raster)
+```
+
+
+```{r}
+
+# creating with default parameters
+first_raster <- raster()
+first_raster
+```
+
+
+```{r}
+
+# creating with other parameters
+r <- raster(ncol=20, nrow=10, xmn=-1000, xmx=1000, ymn=-100, ymx=900)
+values(r) <- runif(ncell(r))
+
+# Plotting the raster
+plot(r, main = "Raster with 200 cells")
+```
+
+
+```{r}
+
+# load the library
+library(rLandsat)
+library(getlandsat)
+
+# input the credentials. Can be obtained from https://ers.cr.usgs.gov/register
+espa_creds("vasu.bibind@gmail.com", "j_D5N|siAisymh2")
+
+# search for the available scenes for the specified data and row/path
+result = landsat_search(min_date = "2016-01-01", max_date = Sys.Date(), path_master = 145,
+row_master = 49)
+
+# Placing an order to download the raster files for the tiles, one for each year
+product_id = c("LC08_L1TP_145049_20180301_20180308_01_T1", "LC08_L1TP_145049_20170330_20170414_01_T1", "LC08_L1TP_145049_20140407_20170424_01_T1")
+result_oreder = espa_order(product_id, product = "sr")
+order_id = result_oreder$order_details$orderid
+download_url = espa_status(order_id)
+
+```
+
+
+```{r}
+
+# Downloading the zipped files once the order is processed
+rLandsat::landsat_download(download_url$order_details$product_dload_url, dest_file = "karnataka_landsat/x")
+```
+
